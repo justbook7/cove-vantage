@@ -72,11 +72,13 @@ function App() {
       // Create a partial assistant message that will be updated progressively
       const assistantMessage = {
         role: 'assistant',
+        intent: null,
         stage1: null,
         stage2: null,
         stage3: null,
         metadata: null,
         loading: {
+          intent: false,
           stage1: false,
           stage2: false,
           stage3: false,
@@ -92,11 +94,36 @@ function App() {
       // Send message with streaming
       await api.sendMessageStream(currentConversationId, content, workspace, (eventType, event) => {
         switch (eventType) {
+          case 'intent_start':
+            setCurrentConversation((prev) => {
+              const messages = [...prev.messages];
+              if (messages.length > 0) {
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.loading.intent = true;
+              }
+              return { ...prev, messages };
+            });
+            break;
+
+          case 'intent_complete':
+            setCurrentConversation((prev) => {
+              const messages = [...prev.messages];
+              if (messages.length > 0) {
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.intent = event.data;
+                lastMsg.loading.intent = false;
+              }
+              return { ...prev, messages };
+            });
+            break;
+
           case 'stage1_start':
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage1 = true;
+              if (messages.length > 0) {
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.loading.stage1 = true;
+              }
               return { ...prev, messages };
             });
             break;
@@ -104,9 +131,11 @@ function App() {
           case 'stage1_complete':
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage1 = event.data;
-              lastMsg.loading.stage1 = false;
+              if (messages.length > 0) {
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.stage1 = event.data;
+                lastMsg.loading.stage1 = false;
+              }
               return { ...prev, messages };
             });
             break;
@@ -114,8 +143,10 @@ function App() {
           case 'stage2_start':
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage2 = true;
+              if (messages.length > 0) {
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.loading.stage2 = true;
+              }
               return { ...prev, messages };
             });
             break;
@@ -123,10 +154,12 @@ function App() {
           case 'stage2_complete':
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage2 = event.data;
-              lastMsg.metadata = event.metadata;
-              lastMsg.loading.stage2 = false;
+              if (messages.length > 0) {
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.stage2 = event.data;
+                lastMsg.metadata = event.metadata;
+                lastMsg.loading.stage2 = false;
+              }
               return { ...prev, messages };
             });
             break;
@@ -134,8 +167,10 @@ function App() {
           case 'stage3_start':
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage3 = true;
+              if (messages.length > 0) {
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.loading.stage3 = true;
+              }
               return { ...prev, messages };
             });
             break;
@@ -143,9 +178,11 @@ function App() {
           case 'stage3_complete':
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage3 = event.data;
-              lastMsg.loading.stage3 = false;
+              if (messages.length > 0) {
+                const lastMsg = messages[messages.length - 1];
+                lastMsg.stage3 = event.data;
+                lastMsg.loading.stage3 = false;
+              }
               return { ...prev, messages };
             });
             break;
