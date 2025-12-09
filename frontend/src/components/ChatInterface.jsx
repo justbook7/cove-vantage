@@ -11,6 +11,7 @@ export default function ChatInterface({
   isLoading,
 }) {
   const [input, setInput] = useState('');
+  const [workspace, setWorkspace] = useState('General');
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -24,7 +25,7 @@ export default function ChatInterface({
   const handleSubmit = (e) => {
     e.preventDefault();
     if (input.trim() && !isLoading) {
-      onSendMessage(input);
+      onSendMessage(input, workspace);
       setInput('');
     }
   };
@@ -41,8 +42,8 @@ export default function ChatInterface({
     return (
       <div className="chat-interface">
         <div className="empty-state">
-          <h2>Welcome to LLM Council</h2>
-          <p>Create a new conversation to get started</p>
+          <h2>Welcome to Cove</h2>
+          <p>Create a new conversation to start chatting with the Cove Orchestrator backend brain</p>
         </div>
       </div>
     );
@@ -54,7 +55,7 @@ export default function ChatInterface({
         {conversation.messages.length === 0 ? (
           <div className="empty-state">
             <h2>Start a conversation</h2>
-            <p>Ask a question to consult the LLM Council</p>
+            <p>Ask a question to consult the Cove Orchestrator backend brain</p>
           </div>
         ) : (
           conversation.messages.map((msg, index) => (
@@ -70,7 +71,7 @@ export default function ChatInterface({
                 </div>
               ) : (
                 <div className="assistant-message">
-                  <div className="message-label">LLM Council</div>
+                  <div className="message-label">Cove</div>
 
                   {/* Stage 1 */}
                   {msg.loading?.stage1 && (
@@ -113,7 +114,7 @@ export default function ChatInterface({
         {isLoading && (
           <div className="loading-indicator">
             <div className="spinner"></div>
-            <span>Consulting the council...</span>
+            <span>Consulting the Cove Orchestrator...</span>
           </div>
         )}
 
@@ -122,6 +123,24 @@ export default function ChatInterface({
 
       {conversation.messages.length === 0 && (
         <form className="input-form" onSubmit={handleSubmit}>
+          <div className="workspace-row">
+            <label className="workspace-label" htmlFor="workspace-select">
+              Workspace
+            </label>
+            <select
+              id="workspace-select"
+              className="workspace-select"
+              value={workspace}
+              onChange={(e) => setWorkspace(e.target.value)}
+              disabled={isLoading}
+            >
+              <option value="General">General</option>
+              <option value="Wooster">Wooster</option>
+              <option value="Bellcourt">Bellcourt</option>
+              <option value="CFB 25">CFB 25</option>
+              <option value="The Quant">The Quant</option>
+            </select>
+          </div>
           <textarea
             className="message-input"
             placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"

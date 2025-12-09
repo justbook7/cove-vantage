@@ -10,7 +10,7 @@ export default function Sidebar({
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <h1>LLM Council</h1>
+        <h1>Cove</h1>
         <button className="new-conversation-btn" onClick={onNewConversation}>
           + New Conversation
         </button>
