@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import IntentBadge from './IntentBadge';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
@@ -73,6 +74,15 @@ export default function ChatInterface({
                 <div className="assistant-message">
                   <div className="message-label">Cove</div>
 
+                  {/* Intent Classification */}
+                  {msg.loading?.intent && (
+                    <div className="stage-loading">
+                      <div className="spinner"></div>
+                      <span>Analyzing query complexity...</span>
+                    </div>
+                  )}
+                  {msg.intent && <IntentBadge intent={msg.intent} />}
+
                   {/* Stage 1 */}
                   {msg.loading?.stage1 && (
                     <div className="stage-loading">
@@ -121,44 +131,43 @@ export default function ChatInterface({
         <div ref={messagesEndRef} />
       </div>
 
-      {conversation.messages.length === 0 && (
-        <form className="input-form" onSubmit={handleSubmit}>
-          <div className="workspace-row">
-            <label className="workspace-label" htmlFor="workspace-select">
-              Workspace
-            </label>
-            <select
-              id="workspace-select"
-              className="workspace-select"
-              value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
-              disabled={isLoading}
-            >
-              <option value="General">General</option>
-              <option value="Wooster">Wooster</option>
-              <option value="Bellcourt">Bellcourt</option>
-              <option value="CFB 25">CFB 25</option>
-              <option value="The Quant">The Quant</option>
-            </select>
-          </div>
-          <textarea
-            className="message-input"
-            placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
+      {/* Input form is always available for ongoing conversations */}
+      <form className="input-form" onSubmit={handleSubmit}>
+        <div className="workspace-row">
+          <label className="workspace-label" htmlFor="workspace-select">
+            Workspace
+          </label>
+          <select
+            id="workspace-select"
+            className="workspace-select"
+            value={workspace}
+            onChange={(e) => setWorkspace(e.target.value)}
             disabled={isLoading}
-            rows={3}
-          />
-          <button
-            type="submit"
-            className="send-button"
-            disabled={!input.trim() || isLoading}
           >
-            Send
-          </button>
-        </form>
-      )}
+            <option value="General">General</option>
+            <option value="Wooster">Wooster</option>
+            <option value="Bellcourt">Bellcourt</option>
+            <option value="CFB 25">CFB 25</option>
+            <option value="The Quant">The Quant</option>
+          </select>
+        </div>
+        <textarea
+          className="message-input"
+          placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={isLoading}
+          rows={3}
+        />
+        <button
+          type="submit"
+          className="send-button"
+          disabled={!input.trim() || isLoading}
+        >
+          Send
+        </button>
+      </form>
     </div>
   );
 }
