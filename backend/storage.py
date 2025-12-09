@@ -1,51 +1,50 @@
-"""JSON-based storage for conversations."""
+"""Database-based storage for conversations."""
 
 import json
-import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from pathlib import Path
-from .config import DATA_DIR
+from sqlalchemy import select, func, desc
+from sqlalchemy.orm import selectinload
+
+from .database import get_db
+from .models import Conversation, Message, StageResult
 
 
-def ensure_data_dir():
-    """Ensure the data directory exists."""
-    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-
-
-def get_conversation_path(conversation_id: str) -> str:
-    """Get the file path for a conversation."""
-    return os.path.join(DATA_DIR, f"{conversation_id}.json")
-
-
-def create_conversation(conversation_id: str) -> Dict[str, Any]:
+async def create_conversation(
+    conversation_id: str,
+    workspace: str = "General"
+) -> Dict[str, Any]:
     """
     Create a new conversation.
 
     Args:
         conversation_id: Unique identifier for the conversation
+        workspace: Workspace context (Wooster, Bellcourt, etc.)
 
     Returns:
         New conversation dict
     """
-    ensure_data_dir()
+    async with get_db() as db:
+        conversation = Conversation(
+            id=conversation_id,
+            created_at=datetime.utcnow(),
+            title="New Conversation",
+            workspace=workspace,
+        )
+        db.add(conversation)
+        await db.commit()
+        await db.refresh(conversation)
 
-    conversation = {
-        "id": conversation_id,
-        "created_at": datetime.utcnow().isoformat(),
-        "title": "New Conversation",
-        "messages": []
-    }
-
-    # Save to file
-    path = get_conversation_path(conversation_id)
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
-
-    return conversation
+        return {
+            "id": conversation.id,
+            "created_at": conversation.created_at.isoformat(),
+            "title": conversation.title,
+            "workspace": conversation.workspace,
+            "messages": []
+        }
 
 
-def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
+async def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     """
     Load a conversation from storage.
 
@@ -55,59 +54,114 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Conversation dict or None if not found
     """
-    path = get_conversation_path(conversation_id)
+    async with get_db() as db:
+        # Load conversation with messages eagerly
+        result = await db.execute(
+            select(Conversation)
+            .where(Conversation.id == conversation_id)
+            .options(selectinload(Conversation.messages))
+        )
+        conversation = result.scalar_one_or_none()
 
-    if not os.path.exists(path):
-        return None
+        if conversation is None:
+            return None
 
-    with open(path, 'r') as f:
-        return json.load(f)
+        # Convert to dict format
+        messages = []
+        for msg in sorted(conversation.messages, key=lambda m: m.created_at):
+            if msg.role == "user":
+                messages.append({
+                    "role": "user",
+                    "content": msg.content
+                })
+            else:
+                # Assistant message - parse JSON content
+                try:
+                    stage_data = json.loads(msg.content)
+                    messages.append({
+                        "role": "assistant",
+                        "stage1": stage_data.get("stage1", []),
+                        "stage2": stage_data.get("stage2", []),
+                        "stage3": stage_data.get("stage3", {})
+                    })
+                except json.JSONDecodeError:
+                    # Fallback for malformed data
+                    messages.append({
+                        "role": "assistant",
+                        "stage1": [],
+                        "stage2": [],
+                        "stage3": {"model": "error", "response": msg.content}
+                    })
+
+        return {
+            "id": conversation.id,
+            "created_at": conversation.created_at.isoformat(),
+            "title": conversation.title,
+            "workspace": conversation.workspace,
+            "messages": messages
+        }
 
 
-def save_conversation(conversation: Dict[str, Any]):
+async def save_conversation(conversation: Dict[str, Any]):
     """
     Save a conversation to storage.
+
+    Note: This is a legacy function for backwards compatibility.
+    In the new system, conversations are saved incrementally via
+    add_user_message() and add_assistant_message().
 
     Args:
         conversation: Conversation dict to save
     """
-    ensure_data_dir()
+    # This is mostly a no-op now since we save incrementally
+    # But we can update the title if changed
+    async with get_db() as db:
+        result = await db.execute(
+            select(Conversation).where(Conversation.id == conversation['id'])
+        )
+        conv = result.scalar_one_or_none()
 
-    path = get_conversation_path(conversation['id'])
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
+        if conv:
+            conv.title = conversation.get('title', conv.title)
+            await db.commit()
 
 
-def list_conversations() -> List[Dict[str, Any]]:
+async def list_conversations() -> List[Dict[str, Any]]:
     """
     List all conversations (metadata only).
 
     Returns:
-        List of conversation metadata dicts
+        List of conversation metadata dicts, sorted by creation time (newest first)
     """
-    ensure_data_dir()
+    async with get_db() as db:
+        # Query conversations with message count
+        result = await db.execute(
+            select(
+                Conversation.id,
+                Conversation.created_at,
+                Conversation.title,
+                Conversation.workspace,
+                func.count(Message.id).label('message_count')
+            )
+            .outerjoin(Message, Conversation.id == Message.conversation_id)
+            .group_by(Conversation.id, Conversation.created_at, Conversation.title, Conversation.workspace)
+            .order_by(desc(Conversation.created_at))
+        )
 
-    conversations = []
-    for filename in os.listdir(DATA_DIR):
-        if filename.endswith('.json'):
-            path = os.path.join(DATA_DIR, filename)
-            with open(path, 'r') as f:
-                data = json.load(f)
-                # Return metadata only
-                conversations.append({
-                    "id": data["id"],
-                    "created_at": data["created_at"],
-                    "title": data.get("title", "New Conversation"),
-                    "message_count": len(data["messages"])
-                })
+        conversations = []
+        for row in result.all():
+            conversations.append({
+                "id": row.id,
+                "created_at": row.created_at.isoformat(),
+                "title": row.title,
+                "workspace": row.workspace,
+                "message_count": row.message_count
+            })
 
-    # Sort by creation time, newest first
-    conversations.sort(key=lambda x: x["created_at"], reverse=True)
-
-    return conversations
+        return conversations
 
 
-def add_user_message(conversation_id: str, content: str):
+async def add_user_message(conversation_id: str, content: str):
     """
     Add a user message to a conversation.
 
@@ -115,19 +169,28 @@ def add_user_message(conversation_id: str, content: str):
         conversation_id: Conversation identifier
         content: User message content
     """
-    conversation = get_conversation(conversation_id)
-    if conversation is None:
-        raise ValueError(f"Conversation {conversation_id} not found")
+    async with get_db() as db:
+        # Check if conversation exists
+        result = await db.execute(
+            select(Conversation).where(Conversation.id == conversation_id)
+        )
+        conversation = result.scalar_one_or_none()
 
-    conversation["messages"].append({
-        "role": "user",
-        "content": content
-    })
+        if conversation is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
 
-    save_conversation(conversation)
+        # Create user message
+        message = Message(
+            conversation_id=conversation_id,
+            role="user",
+            content=content,
+            created_at=datetime.utcnow()
+        )
+        db.add(message)
+        await db.commit()
 
 
-def add_assistant_message(
+async def add_assistant_message(
     conversation_id: str,
     stage1: List[Dict[str, Any]],
     stage2: List[Dict[str, Any]],
@@ -142,21 +205,48 @@ def add_assistant_message(
         stage2: List of model rankings
         stage3: Final synthesized response
     """
-    conversation = get_conversation(conversation_id)
-    if conversation is None:
-        raise ValueError(f"Conversation {conversation_id} not found")
+    async with get_db() as db:
+        # Check if conversation exists
+        result = await db.execute(
+            select(Conversation).where(Conversation.id == conversation_id)
+        )
+        conversation = result.scalar_one_or_none()
 
-    conversation["messages"].append({
-        "role": "assistant",
-        "stage1": stage1,
-        "stage2": stage2,
-        "stage3": stage3
-    })
+        if conversation is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
 
-    save_conversation(conversation)
+        # Serialize stage data as JSON
+        stage_data = {
+            "stage1": stage1,
+            "stage2": stage2,
+            "stage3": stage3
+        }
+
+        # Create assistant message
+        message = Message(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=json.dumps(stage_data),
+            created_at=datetime.utcnow()
+        )
+        db.add(message)
+        await db.commit()
+        await db.refresh(message)
+
+        # Optionally create StageResult records for detailed analytics
+        # (This is for future Phase 3 analytics - commented out for now)
+        # for stage1_result in stage1:
+        #     stage_result = StageResult(
+        #         message_id=message.id,
+        #         stage_num=1,
+        #         model=stage1_result['model'],
+        #         response=stage1_result['response'],
+        #         # tokens and cost would come from openrouter response
+        #     )
+        #     db.add(stage_result)
 
 
-def update_conversation_title(conversation_id: str, title: str):
+async def update_conversation_title(conversation_id: str, title: str):
     """
     Update the title of a conversation.
 
@@ -164,9 +254,108 @@ def update_conversation_title(conversation_id: str, title: str):
         conversation_id: Conversation identifier
         title: New title for the conversation
     """
-    conversation = get_conversation(conversation_id)
-    if conversation is None:
-        raise ValueError(f"Conversation {conversation_id} not found")
+    async with get_db() as db:
+        result = await db.execute(
+            select(Conversation).where(Conversation.id == conversation_id)
+        )
+        conversation = result.scalar_one_or_none()
 
-    conversation["title"] = title
-    save_conversation(conversation)
+        if conversation is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+
+        conversation.title = title
+        await db.commit()
+
+
+# ============================================================================
+# New functions for analytics and stats
+# ============================================================================
+
+async def get_conversation_stats(conversation_id: str) -> Dict[str, Any]:
+    """
+    Get statistics for a specific conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        Dict with stats (message_count, models_used, etc.)
+    """
+    async with get_db() as db:
+        result = await db.execute(
+            select(Conversation)
+            .where(Conversation.id == conversation_id)
+            .options(selectinload(Conversation.messages))
+        )
+        conversation = result.scalar_one_or_none()
+
+        if conversation is None:
+            return {}
+
+        message_count = len(conversation.messages)
+        user_messages = sum(1 for m in conversation.messages if m.role == "user")
+        assistant_messages = sum(1 for m in conversation.messages if m.role == "assistant")
+
+        return {
+            "conversation_id": conversation_id,
+            "message_count": message_count,
+            "user_messages": user_messages,
+            "assistant_messages": assistant_messages,
+            "created_at": conversation.created_at.isoformat(),
+            "workspace": conversation.workspace
+        }
+
+
+async def get_recent_conversations(limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Get the most recent conversations.
+
+    Args:
+        limit: Maximum number of conversations to return
+
+    Returns:
+        List of conversation dicts
+    """
+    async with get_db() as db:
+        result = await db.execute(
+            select(Conversation)
+            .order_by(desc(Conversation.created_at))
+            .limit(limit)
+        )
+        conversations = result.scalars().all()
+
+        return [
+            {
+                "id": conv.id,
+                "created_at": conv.created_at.isoformat(),
+                "title": conv.title,
+                "workspace": conv.workspace
+            }
+            for conv in conversations
+        ]
+
+
+async def delete_conversation(conversation_id: str) -> bool:
+    """
+    Delete a conversation and all its messages.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        True if deleted, False if not found
+    """
+    async with get_db() as db:
+        result = await db.execute(
+            select(Conversation).where(Conversation.id == conversation_id)
+        )
+        conversation = result.scalar_one_or_none()
+
+        if conversation is None:
+            return False
+
+        # Delete the conversation (cascade will delete messages)
+        # Note: db.delete() is synchronous in SQLAlchemy async sessions
+        db.delete(conversation)
+        await db.commit()
+        return True

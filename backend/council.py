@@ -1,24 +1,31 @@
-"""3-stage LLM Council orchestration."""
+"""3-stage LLM Council orchestration with adaptive model selection."""
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from .openrouter import query_models_parallel, query_model
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, FEATURE_FLAGS
+from .tool_orchestrator import run_with_tools
 
 
-async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
+async def stage1_collect_responses(
+    user_query: str,
+    models: List[str],
+    metadata: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
     """
-    Stage 1: Collect individual responses from all council models.
+    Stage 1: Collect individual responses from specified models.
 
     Args:
         user_query: The user's question
+        models: List of model identifiers to query (1-5 models)
+        metadata: Optional metadata for metrics tracking
 
     Returns:
         List of dicts with 'model' and 'response' keys
     """
     messages = [{"role": "user", "content": user_query}]
 
-    # Query all models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    # Query selected models in parallel
+    responses = await query_models_parallel(models, messages, metadata=metadata)
 
     # Format results
     stage1_results = []
@@ -34,7 +41,9 @@ async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
 
 async def stage2_collect_rankings(
     user_query: str,
-    stage1_results: List[Dict[str, Any]]
+    stage1_results: List[Dict[str, Any]],
+    models: List[str],
+    metadata: Optional[Dict[str, Any]] = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -42,6 +51,8 @@ async def stage2_collect_rankings(
     Args:
         user_query: The original user query
         stage1_results: Results from Stage 1
+        models: List of models to use for ranking
+        metadata: Optional metadata for metrics tracking
 
     Returns:
         Tuple of (rankings list, label_to_model mapping)
@@ -94,8 +105,8 @@ Now provide your evaluation and ranking:"""
 
     messages = [{"role": "user", "content": ranking_prompt}]
 
-    # Get rankings from all council models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    # Get rankings from selected models in parallel
+    responses = await query_models_parallel(models, messages, metadata=metadata)
 
     # Format results
     stage2_results = []
@@ -115,7 +126,8 @@ Now provide your evaluation and ranking:"""
 async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
-    stage2_results: List[Dict[str, Any]]
+    stage2_results: List[Dict[str, Any]],
+    budget: str = "standard"
 ) -> Dict[str, Any]:
     """
     Stage 3: Chairman synthesizes final response.
@@ -124,11 +136,55 @@ async def stage3_synthesize_final(
         user_query: The original user query
         stage1_results: Individual model responses from Stage 1
         stage2_results: Rankings from Stage 2
+        budget: Token budget mode ("minimal", "standard", "comprehensive")
 
     Returns:
         Dict with 'model' and 'response' keys
+
+    Token Budgeting:
+    - minimal: Top 1 response only (~50% token reduction)
+    - standard: Top 2 responses + summary (~30% reduction)
+    - comprehensive: All responses (current behavior)
     """
-    # Build comprehensive context for chairman
+    # Apply token budgeting by selecting top responses
+    if budget == "minimal" and len(stage1_results) > 0:
+        # Use only the top-ranked response
+        if stage2_results:
+            # Find the response with best average ranking
+            response_scores = {}
+            for result in stage2_results:
+                parsed = result.get('parsed_ranking', [])
+                for idx, label in enumerate(parsed):
+                    score = len(parsed) - idx  # Higher score for higher rank
+                    response_scores[label] = response_scores.get(label, 0) + score
+
+            # Find the top-ranked response and use only that one
+            if response_scores:
+                # Sort by score (highest first) and get the top label
+                top_label = max(response_scores.items(), key=lambda x: x[1])[0]
+                # Find the index of the top response in stage1_results
+                # Labels are "Response A", "Response B", etc., extract the letter
+                label_letter = top_label.replace("Response ", "").strip()
+                # Map label letters (A, B, C...) to indices (0, 1, 2...)
+                if label_letter and len(label_letter) == 1:
+                    label_index = ord(label_letter) - ord('A')
+                    if 0 <= label_index < len(stage1_results):
+                        stage1_results = [stage1_results[label_index]]
+                    else:
+                        # Index out of range, use first response
+                        stage1_results = stage1_results[:1]
+                else:
+                    # Invalid label format, use first response
+                    stage1_results = stage1_results[:1]
+            else:
+                # No rankings available, use first response
+                stage1_results = stage1_results[:1]
+
+    elif budget == "standard" and len(stage1_results) > 2:
+        # Use top 2 responses
+        stage1_results = stage1_results[:2]
+
+    # Build context for chairman
     stage1_text = "\n\n".join([
         f"Model: {result['model']}\nResponse: {result['response']}"
         for result in stage1_results
@@ -137,7 +193,7 @@ async def stage3_synthesize_final(
     stage2_text = "\n\n".join([
         f"Model: {result['model']}\nRanking: {result['ranking']}"
         for result in stage2_results
-    ])
+    ]) if budget != "minimal" else "(Rankings omitted for efficiency)"
 
     chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
 
@@ -293,18 +349,63 @@ Title:"""
     return title
 
 
-async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
+async def run_adaptive_council(
+    user_query: str,
+    workspace: str = "General",
+    models: Optional[List[str]] = None,
+    workflow: str = "deliberation",
+    suggested_tools: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None
+) -> Tuple[List, List, Dict, Dict]:
     """
-    Run the complete 3-stage council process.
+    Run adaptive council process with 1-5 models based on workflow type.
+
+    Workflows:
+    - "quick": 1 model, no ranking, no synthesis (fastest)
+    - "dual_check": 2 models, simple comparison, optional synthesis
+    - "deliberation": Full 3-stage process (3+ models)
+    - "expert_panel": Full process with all council models
 
     Args:
         user_query: The user's question
+        workspace: Workspace context (for metadata)
+        models: List of models to use (defaults to COUNCIL_MODELS)
+        workflow: Workflow type
+        suggested_tools: List of tools to potentially use
+        metadata: Optional metadata for tracking
 
     Returns:
         Tuple of (stage1_results, stage2_results, stage3_result, metadata)
     """
+    # Default to all council models if not specified
+    if models is None:
+        models = COUNCIL_MODELS
+
+    # Prepare metadata
+    if metadata is None:
+        metadata = {}
+    metadata.update({"workspace": workspace, "workflow": workflow})
+
+    # Tool orchestration (if enabled and tools suggested)
+    tool_results = None
+    query_for_council = user_query
+
+    if FEATURE_FLAGS.get("tools_enabled", False) and suggested_tools:
+        tool_results = await run_with_tools(
+            user_query=user_query,
+            workspace=workspace,
+            suggested_tools=suggested_tools,
+            context=metadata
+        )
+
+        # Use augmented query if tools were successful
+        if tool_results.get("success") and tool_results.get("tools_used"):
+            query_for_council = tool_results["augmented_query"]
+            metadata["tools_used"] = tool_results["tools_used"]
+            metadata["tool_results"] = tool_results["tool_results"]
+
     # Stage 1: Collect individual responses
-    stage1_results = await stage1_collect_responses(user_query)
+    stage1_results = await stage1_collect_responses(query_for_council, models, metadata)
 
     # If no models responded successfully, return error
     if not stage1_results:
@@ -313,8 +414,21 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
             "response": "All models failed to respond. Please try again."
         }, {}
 
+    # Quick workflow: single model, return directly
+    if workflow == "quick" and len(stage1_results) == 1:
+        return stage1_results, [], stage1_results[0], {}
+
+    # Dual check workflow: 2 models, optional simplified synthesis
+    if workflow == "dual_check" and len(stage1_results) == 2:
+        # Skip stage 2 rankings, go directly to synthesis
+        stage3_result = await stage3_synthesize_final(user_query, stage1_results, [])
+        return stage1_results, [], stage3_result, {}
+
+    # Full deliberation workflow (3+ models)
     # Stage 2: Collect rankings
-    stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results)
+    stage2_results, label_to_model = await stage2_collect_rankings(
+        user_query, stage1_results, models, metadata
+    )
 
     # Calculate aggregate rankings
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
@@ -327,9 +441,31 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
     )
 
     # Prepare metadata
-    metadata = {
+    result_metadata = {
         "label_to_model": label_to_model,
         "aggregate_rankings": aggregate_rankings
     }
 
-    return stage1_results, stage2_results, stage3_result, metadata
+    return stage1_results, stage2_results, stage3_result, result_metadata
+
+
+async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
+    """
+    Run the complete 3-stage council process with all council models.
+
+    DEPRECATED: Use run_adaptive_council() for better control.
+    This function is kept for backwards compatibility.
+
+    Args:
+        user_query: The user's question
+
+    Returns:
+        Tuple of (stage1_results, stage2_results, stage3_result, metadata)
+    """
+    # Use adaptive council with all models and full deliberation
+    return await run_adaptive_council(
+        user_query,
+        workspace="General",
+        models=COUNCIL_MODELS,
+        workflow="deliberation"
+    )
