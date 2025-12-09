@@ -1,0 +1,168 @@
+.loading-indicator {
+  padding: 24px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.loading-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+  font-weight: 500;
+  color: #1a1a1a;
+}
+
+.loading-icon {
+  font-size: 24px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.loading-label {
+  min-width: 200px;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+}
+
+/* Progress Bar */
+.progress-bar-container,
+.progress-bar-standalone {
+  width: 100%;
+  height: 8px;
+  background: #e9ecef;
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+  border-radius: 4px;
+  position: relative;
+}
+
+.progress-bar-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.3),
+    transparent
+  );
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Spinner */
+.loading-spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e9ecef;
+  border-top-color: #4a90e2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Stage Hint */
+.stage-hint {
+  font-size: 13px;
+  color: #666;
+  text-align: center;
+  font-style: italic;
+}
+
+/* Loading Dots (inline) */
+.loading-dots {
+  display: inline-block;
+  min-width: 20px;
+  text-align: left;
+  font-weight: bold;
+  color: #4a90e2;
+}
+
+/* Compact variations */
+.loading-indicator.compact {
+  padding: 16px;
+  margin: 8px 0;
+}
+
+.loading-indicator.compact .loading-header {
+  font-size: 14px;
+}
+
+.loading-indicator.compact .loading-icon {
+  font-size: 20px;
+}
+
+.loading-indicator.compact .spinner {
+  width: 24px;
+  height: 24px;
+  border-width: 2px;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .loading-indicator {
+    background: #2d2d2d;
+    border-color: #444;
+  }
+
+  .loading-label {
+    color: #e0e0e0;
+  }
+
+  .stage-hint {
+    color: #999;
+  }
+
+  .progress-bar-container,
+  .progress-bar-standalone {
+    background: #444;
+  }
+
+  .spinner {
+    border-color: #444;
+  }
+}
